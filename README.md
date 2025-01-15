@@ -67,20 +67,7 @@ Required (in normal mode):
 •	--format/-f: Output format (json, csv, or html).
 •	--output/-o: Output file name without extension (default: report).
 
-2. Debug Mode (No Scan)
-```
-python3 apivuln.py --debug
-```
-
-or
-
-```
-python3 apivuln.py --debug -i openapi.json -u http://localhost:5001
-```
-	•	Prints a debug message showing your arguments, then exits without scanning.
-	•	No --input / --url required in --debug mode.
-
-3. Example
+2. Example
 ```
 python3 apivuln.py \
   --input openapi.json \
@@ -118,4 +105,3 @@ python3 apivuln.py \
 This project is licensed under the MIT License.
 
 Use at your own risk, and always comply with applicable laws and ethical guidelines.
-
