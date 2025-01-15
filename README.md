@@ -43,6 +43,7 @@ A **Python 3** command-line tool that scans REST APIs (based on a **Swagger/Open
 ## Install with:
 ```bash
 pip install -r requirements.txt
+```
 
 ## Usage
 	1.	Normal Scan
