@@ -46,7 +46,8 @@ pip install -r requirements.txt
 ```
 
 ## Usage
-	1.	Normal Scan
+1.	Normal Scan
+ 
 ```
 python3 apivuln.py \
   --input openapi.json \
