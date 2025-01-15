@@ -30,10 +30,6 @@ A **Python 3** command-line tool that scans REST APIs (based on a **Swagger/Open
 5. **JWT Bypass**  
    - Attempts forging JWT tokens with **weak keys** (e.g., `"secret"`, `"123456"`) to see if accepted.
 
-6. **Debug Mode**  
-   - A `--debug` argument that prints the assembled command-line arguments and **exits** without scanning.  
-   - **No** need to specify `--input` or `--url` if only using `--debug`.
-
 ---
 
 ## Requirements
