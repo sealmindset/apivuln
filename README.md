@@ -55,7 +55,7 @@ python3 apivuln.py \
   --token <YOUR_JWT_TOKEN> \
   --proxy http://127.0.0.1:8080 \
   --format html \
-  --output report
+  --output [name of report]
 ```
 
 Required (in normal mode):
