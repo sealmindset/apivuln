@@ -46,7 +46,7 @@ pip install -r requirements.txt
 ```
 
 ## Usage
-1.	Normal Scan
+1. Normal Scan
  
 ```
 python3 apivuln.py \
@@ -57,27 +57,30 @@ python3 apivuln.py \
   --format html \
   --output report
 ```
-	•	Required (in normal mode):
-	•	--input/-i: Path to your .json or .yml/.yaml API spec.
-	•	--url/-u: Base URL of the API.
-	•	Optional:
-	•	--token/-t: Bearer token for authenticated endpoints.
-	•	--proxy/-p: Proxy URL (e.g., http://127.0.0.1:8080).
-	•	--format/-f: Output format (json, csv, or html).
-	•	--output/-o: Output file name without extension (default: report).
 
-	2.	Debug Mode (No Scan)
+Required (in normal mode):
+•	--input/-i: Path to your .json or .yml/.yaml API spec.
+•	--url/-u: Base URL of the API.
+•	Optional:
+•	--token/-t: Bearer token for authenticated endpoints.
+•	--proxy/-p: Proxy URL (e.g., http://127.0.0.1:8080).
+•	--format/-f: Output format (json, csv, or html).
+•	--output/-o: Output file name without extension (default: report).
+
+2. Debug Mode (No Scan)
 ```
 python3 apivuln.py --debug
 ```
+
 or
+
 ```
 python3 apivuln.py --debug -i openapi.json -u http://localhost:5001
 ```
 	•	Prints a debug message showing your arguments, then exits without scanning.
 	•	No --input / --url required in --debug mode.
 
-	3.	Example
+3. Example
 ```
 python3 apivuln.py \
   --input openapi.json \
@@ -87,25 +90,28 @@ python3 apivuln.py \
   --token "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
 ```
 ## How It Works
-	1.	Loads the OpenAPI File
-	•	Identifies endpoints (paths), HTTP methods, parameters (query, path), and requestBody schemas.
-	2.	Runs Each Vulnerability Check
-	•	Submits test requests to endpoints, either injecting malicious payloads (SQLi, SSRF) or manipulating IDs (BOLA).
-	3.	Analyzes Responses
-	•	Looks for HTTP status codes (200, 500), error strings (e.g., “sql error”), or acceptance of unauthorized data (mass assignment, etc.).
-	4.	Generates a Report
-	•	Saves findings in the specified format (.json, .csv, or .html).
+1. Loads the OpenAPI File
+- Identifies endpoints (paths), HTTP methods, parameters (query, path), and requestBody schemas.
+
+2. Runs Each Vulnerability Check
+- Submits test requests to endpoints, either injecting malicious payloads (SQLi, SSRF) or manipulating IDs (BOLA).
+
+3. Analyzes Responses
+- Looks for HTTP status codes (200, 500), error strings (e.g., “sql error”), or acceptance of unauthorized data (mass assignment, etc.).
+
+4. Generates a Report
+- Saves findings in the specified format (.json, .csv, or .html).
 
 ## Important Notes
-	•	False Positives/Negatives: Automated scanning can’t replace thorough manual review.
-	•	Legal: Only scan APIs you have explicit permission to test.
-	•	Customization: For multi-step flows (login as user A, change user B’s password), you may need to enhance the script with more business-logic–specific checks.
-	•	Debug: If you just want to see how the script would parse your arguments, use --debug (no scanning).
+- False Positives/Negatives: Automated scanning can’t replace thorough manual review.
+- Legal: Only scan APIs you have explicit permission to test.
+- Customization: For multi-step flows (login as user A, change user B’s password), you may need to enhance the script with more business-logic–specific checks.
+- Debug: If you just want to see how the script would parse your arguments, use --debug (no scanning).
 
 ## Contributing
-	1.	Fork this repository.
-	2.	Create a branch for your feature/fix.
-	3.	Commit changes, then open a pull request.
+1. Fork this repository.
+2. Create a branch for your feature/fix.
+3. Commit changes, then open a pull request.
 
 ## License
 
