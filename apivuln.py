@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """
 API Vulnerability Scanner - OWASP API Security Top 10 (2023 Edition)
-Revised to expand SQL injection tests to:
-- Query parameters
-- JSON body parameters
-- Path parameters
+with Mass Assignment and improved two-phase argument parsing so that
+--debug alone doesn't require --input / --url.
 
-Additional adjustments to Broken Object Level Authorization (BOLA)
-to also replace {id} in path parameters.
+Usage Examples:
+
+1) Normal Scanning:
+   python3 apivuln.py -i openapi.json -u http://localhost:5001 -f html -o test -t <JWT> -p http://127.0.0.1:8080
+
+2) Debug Mode (No Scan):
+   python3 apivuln.py --debug
+   or
+   python3 apivuln.py --debug -i openapi.json -u http://localhost:5001
 """
 
 import argparse
@@ -25,9 +30,9 @@ from requests.exceptions import RequestException
 class APIVulnerabilityScanner:
     """
     Scans API endpoints (from a Swagger/OpenAPI spec) for vulnerabilities
-    identified in the OWASP API Security Top 10 (2023).
+    identified in the OWASP API Security Top 10 (2023), plus Mass Assignment.
     """
-    def __init__(self, spec_file, base_url, proxy=None, token=None,
+    def __init__(self, spec_file=None, base_url=None, proxy=None, token=None,
                  output_format="json", output_file="report"):
         self.spec_file = spec_file
         self.base_url = base_url
@@ -42,6 +47,8 @@ class APIVulnerabilityScanner:
 
     def load_spec(self):
         """Load the OpenAPI/Swagger specification from file."""
+        if not self.spec_file:
+            raise ValueError("No specification file provided.")
         try:
             with open(self.spec_file, "r") as f:
                 if self.spec_file.endswith(".yml") or self.spec_file.endswith(".yaml"):
@@ -65,9 +72,7 @@ class APIVulnerabilityScanner:
 
     def test_endpoint(self, url, method, path_str, details):
         """
-        Calls each OWASP API Top 10 (2023) test method in turn.
-        - path_str is the raw path (e.g., '/users/{id}'), which helps with path param injection.
-        - details is the operation spec from the OpenAPI file.
+        Calls each OWASP API Top 10 (2023) test method in turn, plus Mass Assignment.
         """
         # 1) Broken Object Level Authorization (BOLA)
         self.test_broken_object_level_auth(url, method, path_str, details)
@@ -75,32 +80,35 @@ class APIVulnerabilityScanner:
         # 2) Broken Authentication
         self.test_broken_authentication(url, method)
 
-        # 3) Broken Object Property Level Authorization (NEW in 2023)
+        # 3) Broken Object Property Level Authorization (2023)
         self.test_broken_object_property_auth(url, method, details)
 
-        # 4) Unrestricted Resource Consumption (expanded from “Lack of Resources & Rate Limiting”)
+        # 4) Unrestricted Resource Consumption
         self.test_unrestricted_resource_consumption(url, method)
 
         # 5) Broken Function Level Authorization
         self.test_broken_function_level_auth(url, method)
 
-        # 6) Server Side Request Forgery (SSRF) - NEW in 2023
+        # 6) Server Side Request Forgery (SSRF)
         self.test_ssrf(url, method)
 
         # 7) Security Misconfiguration
         self.test_security_misconfiguration(url, method)
 
-        # 8) Lack of Protection from Automated Threats (expanded in 2023)
+        # 8) Lack of Protection from Automated Threats
         self.test_lack_automated_threat_protection(url, method)
 
-        # 9) Improper Inventory Management (formerly “Improper Assets Management”)
+        # 9) Improper Inventory Management
         self.test_improper_inventory_management(url, method)
 
-        # 10) Unsafe Consumption of APIs (NEW in 2023)
+        # 10) Unsafe Consumption of APIs
         self.test_unsafe_consumption(url, method)
 
         # Extra: Revised SQL Injection coverage
         self.test_sql_injection(url, method, path_str, details)
+
+        # Extra: Dedicated Mass Assignment test
+        self.test_mass_assignment(url, method, details)
 
         # Extra: JWT Bypass
         self.test_jwt_bypass()
@@ -110,24 +118,18 @@ class APIVulnerabilityScanner:
     # ---------------------------------------------------------------------
     def test_broken_object_level_auth(self, url, method, path_str, details):
         """
-        Attempt to manipulate an 'id' or object identifier in both:
-        - Path param replacement (e.g., /users/{id})
-        - Query parameters (if declared in the spec)
+        Attempt to manipulate an 'id' or object identifier in both path param and query param.
         """
         params = details.get("parameters", [])
 
         # A) Path-based ID Replacement
         if "{" in path_str and "}" in path_str:
-            # Check if path_str has something like {id}, {userId}, etc.
-            # We'll replace any {whatever} with "1"
-            # WARNING: if multiple path params exist, do them one at a time for thoroughness
-            # For simplicity, we do a single replacement for demonstration.
             forced_param_url = re.sub(r"\{[^}]+\}", "1", url)
             try:
                 resp = self.make_request(method, forced_param_url)
-                if resp.status_code == 200:
+                if resp and resp.status_code == 200:
                     self.add_result(
-                        forced_param_url, method, "Broken Object Level Authorization",
+                        forced_param_url, method, "Broken Object Level Authorization (BOLA)",
                         "Endpoint returned 200 after forcibly replacing path param with '1'.",
                         "High",
                         "Validate that the authenticated user is authorized for this object."
@@ -139,12 +141,11 @@ class APIVulnerabilityScanner:
         for p in params:
             if p.get("in") == "query" and "id" in p.get("name", "").lower():
                 try:
-                    # If there's an 'id' param, forcibly set it
                     forced_data = {p["name"]: "1"}
                     resp = self.make_request(method, url, params=forced_data)
-                    if resp.status_code == 200:
+                    if resp and resp.status_code == 200:
                         self.add_result(
-                            url, method, "Broken Object Level Authorization",
+                            url, method, "Broken Object Level Authorization (BOLA)",
                             f"Query param {p['name']}=1 returned 200 (potential BOLA).",
                             "High",
                             "Ensure ownership checks on the requested object."
@@ -162,7 +163,7 @@ class APIVulnerabilityScanner:
         self.headers.pop("Authorization", None)
         try:
             resp = self.make_request(method, url)
-            if resp.status_code == 200:
+            if resp and resp.status_code == 200:
                 self.add_result(
                     url, method, "Broken Authentication",
                     "Endpoint returned 200 with no authentication token.",
@@ -176,7 +177,7 @@ class APIVulnerabilityScanner:
         self.headers["Authorization"] = "Bearer invalid_token"
         try:
             resp = self.make_request(method, url)
-            if resp.status_code == 200:
+            if resp and resp.status_code == 200:
                 self.add_result(
                     url, method, "Broken Authentication",
                     "Endpoint returned 200 with an invalid token.",
@@ -193,32 +194,30 @@ class APIVulnerabilityScanner:
     # ---------------------------------------------------------------------
     def test_broken_object_property_auth(self, url, method, details):
         """
-        Tests whether a user can manipulate object properties that belong to another user.
+        Check if you can manipulate object properties that belong to another user.
         """
-        # Only relevant if the endpoint might accept JSON data
         if method in ("POST", "PUT", "PATCH") and details.get("requestBody"):
-            # Attempt overriding a property like "user_id"
             payload = {
-                "user_id": "1",   # Suppose the current user shouldn't be able to set this
+                "user_id": "1",   # Suppose we aren't allowed to set this
                 "email": "attacker@example.com"
             }
             try:
                 resp = self.make_request(method, url, json=payload)
-                if resp.status_code == 200 and "attacker@example.com" in resp.text:
+                if resp and resp.status_code == 200 and "attacker@example.com" in resp.text:
                     self.add_result(
                         url, method, "Broken Object Property Level Authorization",
-                        "Successfully updated another user's property (email/user_id).",
+                        "Successfully updated another user's property (user_id/email).",
                         "High",
-                        "Implement property-level access checks in the server logic."
+                        "Implement property-level checks to ensure only allowed properties are set."
                     )
             except RequestException:
                 pass
 
     # ---------------------------------------------------------------------
-    # 4. Unrestricted Resource Consumption (2023)
+    # 4. Unrestricted Resource Consumption
     # ---------------------------------------------------------------------
     def test_unrestricted_resource_consumption(self, url, method):
-        # Concurrency / rate limiting check
+        # Check concurrency / rate limiting
         with ThreadPoolExecutor(max_workers=10) as executor:
             futures = [executor.submit(self.make_request, method, url) for _ in range(20)]
             responses = []
@@ -240,18 +239,17 @@ class APIVulnerabilityScanner:
 
         # Large payload test (for POST or PUT)
         if method in ("POST", "PUT"):
-            large_payload = {"data": "A" * 1000000}  # ~1 MB of data
+            large_payload = {"data": "A" * 1000000}  # ~1 MB
             try:
                 start_time = time.time()
                 resp = self.make_request(method, url, json=large_payload)
                 duration = time.time() - start_time
-                # If server returns 200 and didn't reject or limit large content
-                if resp.status_code == 200 and duration > 2:
+                if resp and resp.status_code == 200 and duration > 2:
                     self.add_result(
                         url, method, "Unrestricted Resource Consumption",
-                        "Server accepted ~1MB payload with no restriction or significant delay.",
+                        "Server accepted ~1MB payload with no restriction or noticeable limit.",
                         "Medium",
-                        "Enforce max request sizes and resource usage quotas."
+                        "Enforce max request sizes and usage quotas."
                     )
             except RequestException:
                 pass
@@ -260,45 +258,44 @@ class APIVulnerabilityScanner:
     # 5. Broken Function Level Authorization
     # ---------------------------------------------------------------------
     def test_broken_function_level_auth(self, url, method):
+        # If the endpoint name suggests admin/privileged function
         if any(kw in url.lower() for kw in ["/admin", "/manage", "/root", "/super"]):
             original_headers = dict(self.headers)
             self.headers["Authorization"] = "Bearer normal_user_token"  # Fake normal token
             try:
                 resp = self.make_request(method, url)
-                if resp.status_code == 200:
+                if resp and resp.status_code == 200:
                     self.add_result(
                         url, method, "Broken Function Level Authorization",
                         "Privileged endpoint returned 200 with a non-privileged token.",
                         "High",
-                        "Check role-based or function-level authorization on server side."
+                        "Implement role-based or function-level authorization."
                     )
             except RequestException:
                 pass
             self.headers = original_headers
 
     # ---------------------------------------------------------------------
-    # 6. Server Side Request Forgery (SSRF) - NEW in 2023
+    # 6. Server Side Request Forgery (SSRF)
     # ---------------------------------------------------------------------
     def test_ssrf(self, url, method):
-        # Check for known param names that might accept a URL
+        # Attempt naive injection of "http://127.0.0.1:80" if the endpoint might accept a URL
         if method in ("GET", "POST"):
             possible_params = ["url", "endpoint", "target", "link"]
             for param in possible_params:
                 try:
                     data = {param: "http://127.0.0.1:80"}
-                    # For GET, put in query; for POST/PUT, put in body
                     if method == "GET":
                         resp = self.make_request(method, url, params=data)
                     else:
                         resp = self.make_request(method, url, json=data)
 
-                    # If response suggests connection attempt or error
-                    if resp.status_code == 500 or "refused" in resp.text.lower():
+                    if resp and (resp.status_code == 500 or "refused" in resp.text.lower()):
                         self.add_result(
                             url, method, "Server Side Request Forgery (SSRF)",
-                            f"Possible SSRF with param '{param}' to 127.0.0.1:80.",
+                            f"Possible SSRF by injecting internal URL in param '{param}'",
                             "High",
-                            "Validate or restrict external resource fetching within the API."
+                            "Validate or restrict external resource fetching."
                         )
                 except RequestException:
                     pass
@@ -309,32 +306,34 @@ class APIVulnerabilityScanner:
     def test_security_misconfiguration(self, url, method):
         try:
             resp = self.make_request(method, url)
+            if not resp:
+                return
+
             server_hdr = resp.headers.get("Server", "")
             powered_by = resp.headers.get("X-Powered-By", "")
 
-            if server_hdr and server_hdr.lower() != "":
+            if server_hdr:
                 self.add_result(
                     url, method, "Security Misconfiguration",
                     f"Server header reveals info: {server_hdr}",
                     "Low",
-                    "Hide or mask server version info in responses."
+                    "Remove or mask server version details."
                 )
             if powered_by:
                 self.add_result(
                     url, method, "Security Misconfiguration",
                     f"X-Powered-By header found: {powered_by}",
                     "Low",
-                    "Hide or mask framework version info in responses."
+                    "Remove or mask framework version details."
                 )
 
         except RequestException:
             pass
 
     # ---------------------------------------------------------------------
-    # 8. Lack of Protection from Automated Threats (2023)
+    # 8. Lack of Protection from Automated Threats
     # ---------------------------------------------------------------------
     def test_lack_automated_threat_protection(self, url, method):
-        # Basic repeated request test
         with ThreadPoolExecutor(max_workers=5) as executor:
             futures = [executor.submit(self.make_request, method, url) for _ in range(15)]
             responses = []
@@ -345,41 +344,40 @@ class APIVulnerabilityScanner:
                 except:
                     pass
 
+        # If all come back 200, might be no anti-bot measure
         if all(r and r.status_code == 200 for r in responses):
             self.add_result(
                 url, method, "Lack of Protection from Automated Threats",
-                "No sign of anti-bot or anti-automation after 15 requests.",
+                "No sign of rate limiting, CAPTCHA, or blocking after multiple requests.",
                 "Medium",
-                "Implement CAPTCHAs, IP-based blocking, or anomaly detection."
+                "Implement anti-automation (e.g., CAPTCHAs, IP-based rate limiting)."
             )
 
     # ---------------------------------------------------------------------
-    # 9. Improper Inventory Management (2023)
+    # 9. Improper Inventory Management
     # ---------------------------------------------------------------------
     def test_improper_inventory_management(self, url, method):
-        # Looks for dev or older version endpoints
         keywords = ["/v1", "/v2", "/beta", "/old", "/debug", "/test", "/backup"]
         if any(kw in url.lower() for kw in keywords):
             self.add_result(
                 url, method, "Improper Inventory Management",
-                "Potential dev/test/old endpoint found in production.",
+                "Potential dev/test/old endpoint found.",
                 "Medium",
-                "Remove or restrict outdated and unused endpoints."
+                "Remove or secure outdated or unused endpoints."
             )
 
     # ---------------------------------------------------------------------
-    # 10. Unsafe Consumption of APIs (2023)
+    # 10. Unsafe Consumption of APIs
     # ---------------------------------------------------------------------
     def test_unsafe_consumption(self, url, method):
         try:
             resp = self.make_request(method, url)
-            # Very naive check for external references
-            if "http://" in resp.text or "https://" in resp.text:
+            if resp and ("http://" in resp.text or "https://" in resp.text):
                 self.add_result(
                     url, method, "Unsafe Consumption of APIs",
-                    "Response includes external domain references (heuristic).",
+                    "Response includes references to external domains (heuristic).",
                     "Low",
-                    "Validate or secure all external API calls or references."
+                    "Validate or sanitize external API calls or references."
                 )
         except RequestException:
             pass
@@ -389,10 +387,10 @@ class APIVulnerabilityScanner:
     # ---------------------------------------------------------------------
     def test_sql_injection(self, url, method, path_str, details):
         """
-        Expands coverage to:
-        - Query parameters
-        - JSON body (if requestBody is expected)
-        - Path parameters (if {something} is present)
+        Now checks:
+        1) Query parameters
+        2) JSON body (if requestBody is expected)
+        3) Path parameters
         """
         sqli_payloads = [
             "' OR 1=1 --",
@@ -403,17 +401,16 @@ class APIVulnerabilityScanner:
         # 1) Query param injection
         params = details.get("parameters", [])
         query_data = {}
-        # We'll inject just the first payload for demonstration in each param
         for p in params:
             if p.get("in") == "query":
-                query_data[p["name"]] = sqli_payloads[0]  # e.g. ' OR 1=1 --
+                query_data[p["name"]] = sqli_payloads[0]
         if query_data:
             try:
                 resp = self.make_request(method, url, params=query_data)
                 if self.is_sqli_response(resp):
                     self.add_result(
                         url, method, "Injection (SQLi)",
-                        f"Potential SQL injection with query param: {sqli_payloads[0]}",
+                        f"Potential SQL injection (query param) with: {sqli_payloads[0]}",
                         "High",
                         "Use parameterized queries and sanitize user input."
                     )
@@ -421,9 +418,7 @@ class APIVulnerabilityScanner:
                 pass
 
         # 2) JSON body injection
-        # Check if requestBody is specified
         if details.get("requestBody") and method in ("POST", "PUT", "PATCH"):
-            # We guess some common fields for demonstration:
             body_payload = {
                 "username": sqli_payloads[1],
                 "password": "Pass123"
@@ -433,7 +428,7 @@ class APIVulnerabilityScanner:
                 if self.is_sqli_response(resp):
                     self.add_result(
                         url, method, "Injection (SQLi)",
-                        f"Potential SQL injection in JSON body (username): {sqli_payloads[1]}",
+                        f"Potential SQL injection (JSON body) with: {sqli_payloads[1]}",
                         "High",
                         "Use parameterized queries and sanitize user input."
                     )
@@ -441,31 +436,26 @@ class APIVulnerabilityScanner:
                 pass
 
         # 3) Path parameter injection
-        # If something like /users/{id} is present
-        # We'll replace each {param} with an sqli payload in turn
         path_params = re.findall(r"\{([^}]+)\}", path_str)
         if path_params:
             for param_name in path_params:
                 for payload in sqli_payloads:
-                    # Replace {param_name} in the original path with the payload
                     test_url = url.replace(f"{{{param_name}}}", payload)
                     try:
                         resp = self.make_request(method, test_url)
                         if self.is_sqli_response(resp):
                             self.add_result(
                                 test_url, method, "Injection (SQLi)",
-                                f"Potential SQL injection by replacing path param '{param_name}' with: {payload}",
+                                f"Potential SQL injection (path param) with: {payload}",
                                 "High",
-                                "Use parameterized queries and sanitize user input in path parameters."
+                                "Use parameterized queries and sanitize user input."
                             )
                     except RequestException:
                         pass
 
     def is_sqli_response(self, resp):
         """
-        Heuristic to check if a response indicates a potential SQL injection:
-        - HTTP 500
-        - Contains "sql", "syntax", "database error", etc. in the body
+        Simple heuristic: if 500 or certain error keywords appear in the response.
         """
         if not resp:
             return False
@@ -473,9 +463,42 @@ class APIVulnerabilityScanner:
             return True
         body_lower = resp.text.lower()
         return any(
-            keyword in body_lower
-            for keyword in ["sql", "syntax", "database error", "sql error"]
+            kw in body_lower
+            for kw in ["sql", "syntax", "database error", "sql error"]
         )
+
+    # ---------------------------------------------------------------------
+    # Extra: Mass Assignment
+    # ---------------------------------------------------------------------
+    def test_mass_assignment(self, url, method, details):
+        """
+        Attempt to send extra fields not declared in the spec, e.g., "is_admin" or "role".
+        If the server sets or returns these fields, it may be vulnerable.
+        """
+        if method not in ("POST", "PUT", "PATCH"):
+            return
+
+        if not details.get("requestBody"):
+            return
+
+        mass_payload = {
+            "username": "mass_assign_test",
+            "password": "Pass123!",
+            "is_admin": True,
+            "role": "admin"
+        }
+        try:
+            resp = self.make_request(method, url, json=mass_payload)
+            if resp and resp.status_code == 200:
+                if "is_admin" in resp.text.lower() or "role" in resp.text.lower():
+                    self.add_result(
+                        url, method, "Mass Assignment",
+                        "Server accepted an extra field (is_admin/role) not in the spec.",
+                        "High",
+                        "Use a whitelist (or explicit schema) to avoid binding unexpected fields."
+                    )
+        except RequestException:
+            pass
 
     # ---------------------------------------------------------------------
     # Extra: JWT Bypass
@@ -499,16 +522,13 @@ class APIVulnerabilityScanner:
                         )
                 except Exception:
                     pass
-
             self.headers = original_headers
 
     # ---------------------------------------------------------------------
-    # HTTP Request Helper
+    # Request / Reporting Helpers
     # ---------------------------------------------------------------------
     def make_request(self, method, url, params=None, json=None):
-        """
-        Makes a generic HTTP request, returning the response.
-        """
+        """Make an HTTP request, returning the response."""
         return requests.request(
             method=method,
             url=url,
@@ -521,9 +541,7 @@ class APIVulnerabilityScanner:
         )
 
     def add_result(self, endpoint, method, issue, result, severity, recommendation):
-        """
-        Stores a single vulnerability discovery in self.results.
-        """
+        """Store a single vulnerability discovery in self.results."""
         finding = {
             "endpoint": endpoint,
             "method": method,
@@ -537,9 +555,7 @@ class APIVulnerabilityScanner:
             self.results.append(finding)
 
     def generate_report(self):
-        """
-        Save the final findings in the requested format.
-        """
+        """Save the final findings in the requested format."""
         if not self.results:
             print("\nNo findings detected or no endpoints tested.\n")
             return
@@ -577,40 +593,72 @@ class APIVulnerabilityScanner:
                 f.write("</table></body></html>")
             print(f"\nReport written to: {out_file}")
 
-def main():
+
+def parse_args():
+    """
+    Two-phase argument parsing:
+      1) Minimal parse to see if --debug was passed.
+      2) If debug is True, we skip requiring -i/--input and -u/--url.
+         If debug is False, we require them.
+    """
+    # First parse for --debug only (and any unknown args)
+    debug_parser = argparse.ArgumentParser(add_help=False)
+    debug_parser.add_argument("--debug", action="store_true")
+    partial_args, unknown = debug_parser.parse_known_args()
+
+    # Now define the full parser
     parser = argparse.ArgumentParser(
-        description="OWASP API Security Top 10 Scanner (2023) - Revised for Broader SQLi Testing"
-    )
-    parser.add_argument(
-        "--input", "-i", required=True,
-        help="Swagger/OpenAPI specification file (YAML/JSON)."
-    )
-    parser.add_argument(
-        "--url", "-u", required=True,
-        help="Base URL of the target API."
-    )
-    parser.add_argument(
-        "--proxy", "-p",
-        help="Optional proxy (e.g. http://127.0.0.1:8080)."
-    )
-    parser.add_argument(
-        "--token", "-t",
-        help="Bearer token for authentication (optional)."
-    )
-    parser.add_argument(
-        "--format", "-f",
-        choices=["json", "csv", "html"],
-        default="json",
-        help="Report output format (default: json)."
-    )
-    parser.add_argument(
-        "--output", "-o",
-        default="report",
-        help="Output file name (without extension). (default: report)"
+        description="OWASP API Security Top 10 Scanner (2023) + Mass Assignment + Debug Mode"
     )
 
-    args = parser.parse_args()
+    # If not in debug mode, require input and url
+    if not partial_args.debug:
+        parser.add_argument("--input", "-i", required=True, help="OpenAPI/Swagger file.")
+        parser.add_argument("--url", "-u", required=True, help="Base URL of the API.")
+    else:
+        parser.add_argument("--input", "-i", help="OpenAPI/Swagger file (optional in debug).")
+        parser.add_argument("--url", "-u", help="Base URL of the API (optional in debug).")
 
+    parser.add_argument("--proxy", "-p", help="Proxy URL (optional).")
+    parser.add_argument("--token", "-t", help="Bearer token (optional).")
+    parser.add_argument("--format", "-f", choices=["json", "csv", "html"], default="json",
+                        help="Report format (default: json).")
+    parser.add_argument("--output", "-o", default="report",
+                        help="Output file name (without extension). (default: report)")
+    parser.add_argument("--debug", action="store_true",
+                        help="Print the command with all arguments and exit without scanning.")
+
+    # Parse again with the full parser (including known & unknown)
+    return parser.parse_args(unknown)
+
+
+def main():
+    args = parse_args()
+
+    # If --debug was specified, just print the arguments we do have, then exit
+    if args.debug:
+        # Construct debug message
+        debug_cmd = "apivuln.py"
+        if args.input:
+            debug_cmd += f" -i {args.input}"
+        if args.url:
+            debug_cmd += f" -u {args.url}"
+        if args.proxy:
+            debug_cmd += f" -p {args.proxy}"
+        if args.token:
+            debug_cmd += f" -t {args.token}"
+        if args.format:
+            debug_cmd += f" -f {args.format}"
+        if args.output:
+            debug_cmd += f" -o {args.output}"
+        debug_cmd += " --debug"
+
+        print("\n[DEBUG MODE] The following arguments would be used:\n")
+        print(debug_cmd)
+        print("\nExiting now (no scanning performed).")
+        return
+
+    # Normal execution:
     scanner = APIVulnerabilityScanner(
         spec_file=args.input,
         base_url=args.url,
@@ -619,10 +667,10 @@ def main():
         output_format=args.format,
         output_file=args.output
     )
-
     scanner.load_spec()
     scanner.scan_endpoints()
     scanner.generate_report()
+
 
 if __name__ == "__main__":
     main()
