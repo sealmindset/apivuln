@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """
 API Vulnerability Scanner - OWASP API Security Top 10 (2023)
-with an optional OpenAI analysis step that sends the HTTP response
-to OpenAI for further assessment.
+Integrated with OpenAI's new interface in openai>=1.0.0
+
+Key Revisions:
+- Uses openai.chat.completions.create(...) for calls to GPT models.
+- Accesses response via completion["choices"][0]["message"]["content"].
+- Removes references to .completions[0].
 """
 
 import argparse
@@ -12,7 +16,7 @@ import requests
 import jwt
 import re
 import time
-import openai  # <-- You need to: pip install openai
+import openai  # Must be openai>=1.0.0
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urljoin
 from requests.exceptions import RequestException
@@ -42,10 +46,10 @@ class APIVulnerabilityScanner:
         self.headers = {"Authorization": f"Bearer {token}"} if token else {}
         self.output_format = output_format
         self.output_file = output_file
+
+        # OpenAI configuration
         self.openai_api_key = openai_api_key
         self.openai_analysis = openai_analysis
-
-        # If openai_api_key is provided, set it
         if openai_api_key:
             openai.api_key = openai_api_key
 
@@ -79,15 +83,20 @@ class APIVulnerabilityScanner:
 
     def test_endpoint(self, url, method, path_str, details):
         """
-        Each test is called in turn. You can add or remove tests as needed.
+        Calls each test method for vulnerabilities. Add/modify as needed.
+        Here we just show 2 examples for brevity: Broken Authentication, SQLi.
         """
-        # Example calls (not all shown for brevity):
+        # Example: Broken Authentication
         self.test_broken_authentication(url, method)
-        self.test_sql_injection(url, method, path_str, details)
-        # ... add other tests here ...
-        # self.test_mass_assignment(...), etc.
 
-    # Example: Broken Authentication test
+        # Example: SQL Injection
+        self.test_sql_injection(url, method, path_str, details)
+
+        # Add other tests, e.g. self.test_mass_assignment(url, method, details), etc.
+
+    # ---------------------------------------------------------------------
+    # 1) Broken Authentication Example
+    # ---------------------------------------------------------------------
     def test_broken_authentication(self, url, method):
         original_headers = dict(self.headers)
 
@@ -95,16 +104,15 @@ class APIVulnerabilityScanner:
         self.headers.pop("Authorization", None)
         try:
             resp = self.make_request(method, url)
-            # If 200, might be broken auth
             if resp and resp.status_code == 200:
-                # Possibly do an openai check:
+                # If openai_analysis is enabled, do AI-based analysis
                 ai_notes = self.ai_analysis_if_enabled(resp, "BrokenAuth")
                 self.add_result(
                     url, method,
                     "Broken Authentication",
                     "Endpoint returned 200 with no token.",
                     "High",
-                    "Require valid authentication for this endpoint.",
+                    "Require valid authentication.",
                     resp,
                     ai_notes=ai_notes
                 )
@@ -131,7 +139,9 @@ class APIVulnerabilityScanner:
 
         self.headers = original_headers
 
-    # Example: SQL Injection test
+    # ---------------------------------------------------------------------
+    # 2) SQL Injection Example
+    # ---------------------------------------------------------------------
     def test_sql_injection(self, url, method, path_str, details):
         sqli_payloads = ["' OR 1=1 --", "' UNION SELECT NULL--"]
         params = details.get("parameters", [])
@@ -141,6 +151,7 @@ class APIVulnerabilityScanner:
         for p in params:
             if p.get("in") == "query":
                 query_data[p["name"]] = sqli_payloads[0]
+
         if query_data:
             try:
                 resp = self.make_request(method, url, params=query_data)
@@ -158,44 +169,39 @@ class APIVulnerabilityScanner:
             except RequestException:
                 pass
 
+    # Basic heuristic for SQLi
     def is_sqli_response(self, resp):
         if not resp:
             return False
         if resp.status_code == 500:
             return True
         lower_body = resp.text.lower()
-        return any(keyword in lower_body for keyword in ["sql", "syntax", "database error", "sql error"])
+        return any(kw in lower_body for kw in ["sql", "syntax", "database error", "sql error"])
 
     # ---------------------------------------------------------------------
-    # OpenAI Integration
+    # OpenAI Integration (for openai>=1.0.0)
     # ---------------------------------------------------------------------
     def ai_analysis_if_enabled(self, resp, test_label="General"):
-        """
-        If openai_analysis is True and we have an API key,
-        send the HTTP response to OpenAI for a deeper analysis.
-        Return the AI's answer (string) or None.
-        """
+        """If openai_analysis is True, send partial HTTP response to OpenAI for analysis."""
         if not self.openai_analysis or not self.openai_api_key:
             return None
 
-        # You might limit the text length or parse only relevant parts
-        response_text = resp.text[:2000]  # limit to first 2k chars
+        # Truncate the response text to avoid huge data
+        response_text = resp.text[:2000]
 
-        # Build a system + user message approach
         system_prompt = (
-            "You are a security expert specialized in analyzing HTTP responses.\n"
-            "You look for signs of vulnerabilities, misconfigurations, or potential exploits.\n"
+            "You are a security expert specialized in analyzing HTTP responses. "
+            "Identify potential vulnerabilities, misconfigurations, or exploits."
         )
         user_prompt = (
-            f"This response is from a test labeled '{test_label}'.\n"
-            f"Here is the partial HTTP response (truncated if too long):\n\n"
-            f"{response_text}\n\n"
-            "Please identify any potential vulnerabilities, warnings, or security issues you see.\n"
-            "If you see nothing suspicious, say so. Provide reasoning."
+            f"This response is from a test labeled '{test_label}'.\n\n"
+            f"Partial HTTP response:\n{response_text}\n\n"
+            "Please identify any potential vulnerabilities or security concerns you see."
         )
 
         try:
-            completion = openai.ChatCompletion.create(
+            # Note the updated usage for openai>=1.0.0
+            completion = openai.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -204,10 +210,11 @@ class APIVulnerabilityScanner:
                 max_tokens=200,
                 temperature=0.3,
             )
-            answer = completion.choices[0].message.content.strip()
+
+            # Access the content from "choices" not from "completions"
+            answer = completion["choices"][0]["message"]["content"].strip()
             return answer
         except Exception as e:
-            # If there's an error (timeout, rate limit, etc.), just note it
             return f"[OpenAI Error: {e}]"
 
     # ---------------------------------------------------------------------
@@ -225,7 +232,8 @@ class APIVulnerabilityScanner:
             allow_redirects=True
         )
 
-    def add_result(self, endpoint, method, issue, result, severity, recommendation, resp, ai_notes=None):
+    def add_result(self, endpoint, method, issue, result, severity,
+                   recommendation, resp, ai_notes=None):
         """Add a vulnerability discovery. Store AI analysis if present."""
         snippet = resp.text[:300].replace("\n", "\\n") if resp else ""
         status_code = resp.status_code if resp else None
@@ -237,12 +245,12 @@ class APIVulnerabilityScanner:
             "severity": severity,
             "recommendation": recommendation,
             "status_code": status_code,
-            "body_snippet": snippet,
+            "body_snippet": snippet
         }
-        # If we have an AI analysis, store it
         if ai_notes:
             finding["ai_analysis"] = ai_notes
 
+        # Avoid duplicates (naive check)
         if finding not in self.results:
             self.results.append(finding)
 
@@ -256,6 +264,7 @@ class APIVulnerabilityScanner:
             with open(out_file, "w") as f:
                 json.dump(self.results, f, indent=4)
             print(f"\nReport written to: {out_file}")
+
         elif self.output_format == "csv":
             import csv
             out_file = f"{self.output_file}.csv"
@@ -265,6 +274,7 @@ class APIVulnerabilityScanner:
                 writer.writeheader()
                 writer.writerows(self.results)
             print(f"\nReport written to: {out_file}")
+
         elif self.output_format == "html":
             out_file = f"{self.output_file}.html"
             with open(out_file, "w") as f:
@@ -275,6 +285,7 @@ class APIVulnerabilityScanner:
                 for header in headers:
                     f.write(f"<th>{header}</th>")
                 f.write("</tr>")
+
                 for row in self.results:
                     f.write("<tr>")
                     for header in headers:
@@ -298,7 +309,6 @@ def parse_args():
     parser.add_argument("--openai-api-key", help="OpenAI API key if you want to enable AI-based analysis.")
     parser.add_argument("--openai-analysis", action="store_true",
                         help="Enable calls to OpenAI for each test response analysis.")
-    # The user might still want debug mode or other features from prior code, omitted for brevity
     return parser.parse_args()
 
 
@@ -316,7 +326,7 @@ def main():
         openai_analysis=args.openai_analysis
     )
 
-    # If user provided an input file + url, do scanning
+    # If the user provided an input spec and base url, run the scan
     if args.input and args.url:
         scanner.load_spec()
         scanner.scan_endpoints()
