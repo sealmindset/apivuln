@@ -14,6 +14,7 @@ import os
 import base64
 import random
 import time
+import html
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urljoin
 from requests.exceptions import RequestException
@@ -437,7 +438,7 @@ class APIVulnerabilityScanner:
                 severity="None",
                 recommendation="Ensure mass assignment protections are in place where applicable.",
                 req_method=method,
-                request_headers={},
+                request_headers=request_headers,
                 request_body="N/A",
                 response_body="N/A",
                 resp=None,
@@ -1280,7 +1281,7 @@ class APIVulnerabilityScanner:
                 severity="None",
                 recommendation="Implement rate limiting and account lockout mechanisms where applicable.",
                 req_method=method,
-                request_headers={},
+                request_headers=request_headers,
                 request_body="N/A",
                 response_body="N/A",
                 resp=None,
@@ -1335,7 +1336,7 @@ class APIVulnerabilityScanner:
                 severity="None",
                 recommendation="Ensure data manipulation protections are in place where applicable.",
                 req_method=method,
-                request_headers={},
+                request_headers=request_headers,
                 request_body="N/A",
                 response_body="N/A",
                 resp=None,
@@ -1968,6 +1969,9 @@ class APIVulnerabilityScanner:
             "Provide a concise summary of potential risks and any observations."
         )
 
+        # Log the prompt being sent to OpenAI
+        self.log(f"Sending to OpenAI prompt: {prompt}")
+
         payload = {
             "model": "gpt-4",
             "messages": [
@@ -1981,7 +1985,7 @@ class APIVulnerabilityScanner:
 
         while retries < max_retries:
             try:
-                response = requests.post(
+                response_openai = requests.post(
                     "https://api.openai.com/v1/chat/completions",
                     headers={
                         "Authorization": f"Bearer {openai.api_key}",
@@ -1989,19 +1993,19 @@ class APIVulnerabilityScanner:
                     },
                     json=payload
                 )
-                if response.status_code == 200:
-                    feedback = response.json()["choices"][0]["message"]["content"]
+                if response_openai.status_code == 200:
+                    feedback = response_openai.json()["choices"][0]["message"]["content"]
                     self.log(f"OpenAI GPT-4 response: {feedback}")
                     return feedback
-                elif response.status_code == 429:
+                elif response_openai.status_code == 429:
                     retries += 1
-                    retry_after = int(response.headers.get("Retry-After", "1"))
+                    retry_after = int(response_openai.headers.get("Retry-After", "1"))
                     wait_time = (2 ** retries) + random.uniform(0, 1)
                     self.log(f"OpenAI API rate limit exceeded. Retrying in {wait_time:.2f} seconds...")
                     time.sleep(wait_time)
                 else:
-                    self.log(f"OpenAI API error: {response.status_code} - {response.text}")
-                    return f"OpenAI API error: {response.status_code}"
+                    self.log(f"OpenAI API error: {response_openai.status_code} - {response_openai.text}")
+                    return f"OpenAI API error: {response_openai.status_code}"
             except requests.exceptions.RequestException as e:
                 self.log(f"Failed to communicate with OpenAI: {e}")
                 return f"Error communicating with OpenAI: {e}"
@@ -2023,9 +2027,12 @@ class APIVulnerabilityScanner:
             response_body = "N/A"
         elif not isinstance(response_body, str):
             response_body = str(response_body)
+        else:
+            # No escaping; log all content as-is
+            pass
 
-        # Convert headers dict to a formatted string
-        headers_formatted = "<br>".join([f"{key}: {value}" for key, value in request_headers.items()]) if request_headers else "N/A"
+        # Convert headers dict to a formatted string without escaping
+        headers_formatted = "\n".join([f"{key}: {value}" for key, value in request_headers.items()]) if request_headers else "N/A"
         self.results.append({
             "endpoint": endpoint,
             "method": method,
@@ -2060,14 +2067,10 @@ class APIVulnerabilityScanner:
                     request_body = res['request_body_sent']
                     if not isinstance(request_body, str):
                         request_body = "N/A"
-                    else:
-                        request_body = request_body.replace('<', '&lt;').replace('>', '&gt;') if res['request_body_sent'] != "N/A" else "N/A"
 
                     response_body = res['response_body_received']
                     if not isinstance(response_body, str):
                         response_body = "N/A"
-                    else:
-                        response_body = response_body.replace('<', '&lt;').replace('>', '&gt;') if res['response_body_received'] != "N/A" else "N/A"
 
                     f.write(f"<tr><td>{res['endpoint']}</td><td>{res['method']}</td>"
                             f"<td>{res['issue']}</td><td>{res['result']}</td>"
@@ -2077,9 +2080,11 @@ class APIVulnerabilityScanner:
                             f"<td><pre>{request_body}</pre></td>"
                             f"<td><pre>{response_body}</pre></td>"
                             f"<td>{res['vulnerability_found']}</td>"
-                            f"<td>{res['openai_feedback']}</td></tr>")
+                            f"<td>{html.escape(res['openai_feedback'])}</td></tr>")
                 f.write("</table></body></html>")
             self.log(f"Report saved as {self.output_file}.html")
+
+# Helper Functions
 
 def resp_truncated(text, limit=500):
     """Truncate response text for logging."""
