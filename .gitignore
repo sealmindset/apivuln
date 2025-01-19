@@ -1,6 +1,10 @@
+<<<<<<< HEAD
 examples/
 bkjsonl/
 openaidev/
 backup/
 
 .DS_Store
+=======
+.env
+>>>>>>> 2576abf4f1b4550ab08cb9fe38f7bf1cb07b90d8
