@@ -508,40 +508,23 @@ class APIVulnerabilityScanner:
                 session_id=session_id,
             )
 
-    def generate_payload(self, details=None, session_id=None):
-        if details is None:
-            details = {}
-
-        random_suffix = "".join(
-            random.choices(string.ascii_lowercase + string.digits, k=6)
-        )
-        payload = {
-            "username": details.get("username", f"testuser_{random_suffix}"),
-            "email": details.get("email", f"testuser_{random_suffix}@example.com"),
-            "password": details.get("password", "securepassword"),
-            "admin": "true",
-            "isAdmin": True,
-            "role": "admin",
-            "superuser": True,
-        }
-        if session_id:
-            self.log(f"Generated payload (type: {type(payload)}): {payload}", session_id)
-        return payload
-
     def test_mass_assignment(self, url, method, path_str, details, session_id):
-        self.log(
-            f"Testing {method} {url} for mass assignment vulnerabilities.", session_id
-        )
+        self.log(f"Testing {method} {url} for mass assignment vulnerabilities.", session_id)
         try:
+            # Generate payload
             payload = self.generate_payload(details, session_id)
+            self.log(f"Generated payload: {payload}", session_id)
+
+            # Make the request
             resp, request_body, request_headers = self.make_request(
                 method=method,
                 url=url,
                 json_data=payload,
                 session_id=session_id
             )
+
+            # Handle the response
             if resp and resp.status_code == 200:
-                self.log(f"Response body: {resp.text}", session_id)
                 self.add_result(
                     endpoint=url,
                     method=method,
@@ -558,10 +541,6 @@ class APIVulnerabilityScanner:
                     session_id=session_id,
                 )
             else:
-                self.log(
-                    f"Unexpected response: {resp.status_code if resp else 'No response'}",
-                    session_id,
-                )
                 self.add_result(
                     endpoint=url,
                     method=method,
@@ -594,6 +573,7 @@ class APIVulnerabilityScanner:
                 vulnerability_found=False,
                 session_id=session_id,
             )
+
 
     def test_insufficient_access_control(self, url, method, path_str, details, session_id):
         self.log("Testing Insufficient Access Control.", session_id)
@@ -825,45 +805,79 @@ class APIVulnerabilityScanner:
                     )
 
     def test_improper_assets_management(self, url, method, path_str, details, session_id):
-        self.log("Testing Improper Assets Management.", session_id)
-        deprecated_versions = ["/v1/", "/v2/"]
-        for version in deprecated_versions:
-            deprecated_url = url.replace("/v3/", version)
-            resp, request_body, request_headers = self.make_request(
-                method, deprecated_url, session_id=session_id
+        """Test for improper assets management vulnerabilities."""
+        self.log(f"Testing Improper Assets Management on {url}.", session_id)
+
+        try:
+            # Make the initial request
+            resp1, request_body1, request_headers1 = self.make_request(
+                method=method, url=url, session_id=session_id
             )
-            if resp and resp.status_code == 200:
+            self.log(f"Initial response: {resp1.text}", session_id)
+
+            # Make a second request to observe behavior
+            resp2, request_body2, request_headers2 = self.make_request(
+                method=method, url=url, session_id=session_id
+            )
+            self.log(f"Second response: {resp2.text}", session_id)
+
+            # Analyze responses
+            if resp2 and resp2.status_code == 500:
                 self.add_result(
-                    endpoint=deprecated_url,
+                    endpoint=url,
                     method=method,
                     issue="Improper Assets Management",
-                    result=f"Deprecated API version accessible: {version}",
-                    severity="Low",
-                    recommendation="Deprecate and properly manage old API versions.",
+                    result=(
+                        "Repeated calls to the endpoint resulted in a server-side error exposing "
+                        "sensitive information, including a traceback and database details."
+                    ),
+                    severity="High",
+                    recommendation=(
+                        "Ensure endpoints are idempotent and errors do not expose sensitive details. "
+                        "Implement proper error handling and logging."
+                    ),
                     req_method=method,
-                    request_headers=request_headers,
-                    request_body=request_body,
-                    response_body=resp.text,
-                    resp=resp,
+                    request_headers=request_headers2,
+                    request_body=request_body2,
+                    response_body=resp2.text,
+                    resp=resp2,
                     vulnerability_found=True,
                     session_id=session_id,
                 )
             else:
                 self.add_result(
-                    endpoint=deprecated_url,
+                    endpoint=url,
                     method=method,
                     issue="Improper Assets Management",
-                    result=f"No improper assets management detected for version: {version}. Received status code {resp.status_code if resp else 'No Response'}.",
+                    result="No improper assets management issues detected.",
                     severity="None",
-                    recommendation="Deprecate and properly manage old API versions.",
+                    recommendation="Ensure proper error handling and endpoint idempotency.",
                     req_method=method,
-                    request_headers=request_headers,
-                    request_body=request_body,
-                    response_body=resp.text if resp else "No response",
-                    resp=resp,
+                    request_headers=request_headers1,
+                    request_body=request_body1,
+                    response_body=resp1.text,
+                    resp=resp1,
                     vulnerability_found=False,
                     session_id=session_id,
                 )
+        except Exception as e:
+            self.log(f"Error during improper assets management test: {e}", session_id)
+            self.add_result(
+                endpoint=url,
+                method=method,
+                issue="Improper Assets Management",
+                result=f"Error encountered during test: {e}",
+                severity="Medium",
+                recommendation="Investigate the error and ensure robust endpoint handling.",
+                req_method=method,
+                request_headers=request_headers1 if "request_headers1" in locals() else {},
+                request_body=request_body1 if "request_body1" in locals() else None,
+                response_body="No response due to error",
+                resp=None,
+                vulnerability_found=False,
+                session_id=session_id,
+            )
+
 
     def test_insufficient_data_protection(self, url, method, path_str, details, session_id):
         self.log("Testing Insufficient Data Protection.", session_id)
@@ -1532,40 +1546,21 @@ class APIVulnerabilityScanner:
                 server_header = resp.headers.get("Server", "")
                 # Always add the entire response body to the report for completeness
                 if server_header:
-                    if re.search(r"werkzeug", server_header, re.IGNORECASE) and re.search(
-                        r"python", server_header, re.IGNORECASE
-                    ):
-                        self.add_result(
-                            endpoint=url,
-                            method=method,
-                            issue="Information Disclosure",
-                            result="Server header reveals server technology and Python version.",
-                            severity="Medium",
-                            recommendation="Configure the server to hide sensitive information in headers.",
-                            req_method=method,
-                            request_headers=request_headers,
-                            request_body=request_body,
-                            response_body=resp.text,  # store entire body
-                            resp=resp,
-                            vulnerability_found=True,
-                            session_id=session_id,
-                        )
-                    else:
-                        self.add_result(
-                            endpoint=url,
-                            method=method,
-                            issue="Information Disclosure",
-                            result="Server header does not disclose sensitive information.",
-                            severity="None",
-                            recommendation="Ensure server headers do not reveal sensitive information.",
-                            req_method=method,
-                            request_headers=request_headers,
-                            request_body=request_body,
-                            response_body=resp.text,  # store entire body
-                            resp=resp,
-                            vulnerability_found=False,
-                            session_id=session_id,
-                        )
+                    self.add_result(
+                        endpoint=url,
+                        method=method,
+                        issue="Information Disclosure",
+                        result="Server header does not disclose sensitive information.",
+                        severity="None",
+                        recommendation="Ensure server headers do not reveal sensitive information.",
+                        req_method=method,
+                        request_headers=request_headers,
+                        request_body=request_body,
+                        response_body=resp.text,  # store entire body
+                        resp=resp,
+                        vulnerability_found=False,
+                        session_id=session_id,
+                    )
                 else:
                     self.add_result(
                         endpoint=url,
@@ -2377,58 +2372,45 @@ class APIVulnerabilityScanner:
         self.log(f"Discovered passwords: {passwords}", session_id)
         return passwords
 
-    def make_request(
-        self,
-        method,
-        url,
-        params=None,
-        json_data=None,
-        data=None,
-        files=None,
-        headers=None,
-        session_id=None,
-    ):
-        method = method.strip().upper()
-        self.log(f"Normalized HTTP method: {method}", session_id)
-        merged_headers = self.headers.copy() if hasattr(self, "headers") else {}
-        if headers:
-            merged_headers.update(headers)
-        if method in ["POST", "PUT"]:
-            if json_data is not None:
-                merged_headers.setdefault("Content-Type", "application/json")
-            elif data is not None:
-                merged_headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
-
-        request_body = None
-        if json_data is not None and isinstance(json_data, dict):
-            request_body = json.dumps(json_data, indent=2)
-        elif data:
-            request_body = data
-
-        self.log(
-            f"Request being sent:\n{method} {url}\nHeaders: {merged_headers}\nBody: {request_body or 'None'}",
-            session_id,
-        )
+    def make_request(self, method, url, params=None, json_data=None, data=None, files=None, headers=None, session_id=None):
+        """Send an HTTP request and return the response, request body, and request headers."""
+        if session_id is None:
+            session_id = self.get_new_session_id()
+        self.log(f"Preparing {method} request to {url}.", session_id)
 
         try:
+            # Combine headers with global headers
+            merged_headers = self.headers.copy()
+            if headers:
+                merged_headers.update(headers)
+
+            # Log the request details
+            self.log(f"Headers: {merged_headers}", session_id)
+            request_body = json.dumps(json_data, indent=2) if json_data else data
+            self.log(f"Request body: {request_body}", session_id)
+
+            # Send the request
             response = requests.request(
-                method=method,
+                method=method.upper(),
                 url=url,
                 headers=merged_headers,
-                proxies=self.proxy,
                 params=params,
                 json=json_data,
                 data=data,
                 files=files,
                 timeout=10,
-                allow_redirects=True,
+                proxies=self.proxy
             )
+
+            # Log response details
             self.log(f"Received response with status code {response.status_code}.", session_id)
-            self.log(f"Response body: {resp_truncated(response.text)}", session_id)
+            self.log(f"Response body: {response.text}", session_id)
+
             return response, request_body, merged_headers
-        except requests.RequestException as e:
-            self.log(f"Request to {url} failed: {e}", session_id)
-            return None, request_body, {}
+        except Exception as e:
+            self.log(f"Error during request: {e}", session_id)
+            return None, None, None
+
 
     def send_to_openai(self, content, purpose="Analysis", sid=None):
         if sid is None:
